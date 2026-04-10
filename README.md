@@ -1,4 +1,18 @@
-# `canery`
+<p align="center">
+  <img src="docs/assets/canery-logo.png" alt="canery logo">
+</p>
+
+<p align="center">
+  <a href="https://github.com/rluders/canery/actions/workflows/ci.yml">
+    <img src="https://github.com/rluders/canery/actions/workflows/ci.yml/badge.svg" alt="CI">
+  </a>
+  <a href="https://go.dev/doc/devel/release#go1.24.2">
+    <img src="https://img.shields.io/badge/go-1.24.2-00ADD8?logo=go&logoColor=white" alt="Go 1.24.2">
+  </a>
+  <a href="LICENSE">
+    <img src="https://img.shields.io/badge/license-MIT-green.svg" alt="MIT License">
+  </a>
+</p>
 
 `canery` is a small authorization core built around checks shaped as:
 
@@ -207,12 +221,15 @@ still satisfies `errors.Is(err, canery.ErrInvalidRequest)`.
 
 ```mermaid
 flowchart LR
-  B[Builder] --> R[Request]
-  P[PolicyAuthorizer] --> E[Engine]
-  R --> E[Engine]
+  B[Builder] --> A[Authorizer]
+  A --> PA[PolicyAuthorizer]
+  A --> E[Engine]
+  PA --> E
+  B --> R[Request]
+  R --> A
   E --> M[MembershipReader]
   E --> G[GroupReader]
-  E --> P[PermissionReader]
+  E --> PR[PermissionReader]
   E --> S[ResourceScopeResolver]
 ```
 
@@ -221,10 +238,13 @@ flowchart LR
 ```mermaid
 flowchart TD
   A[Check request] --> B[Validate request]
+  B -->|invalid| X[Return validation error]
   B --> C{Resource ID present?}
   C -- yes --> D[Verify resource belongs to scope]
+  D -- no --> L[Deny]
   C -- no --> E[Verify subject belongs to scope]
   D --> E
+  E -- no --> L
   E --> F[Check direct subject permission]
   F --> G{Allowed?}
   G -- yes --> H[Allow]
