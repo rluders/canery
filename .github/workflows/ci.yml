@@ -27,3 +27,15 @@ jobs:
 
       - name: Run tests
         run: go test ./...
+
+      - name: Test advanced example module
+        working-directory: examples/advanced
+        run: go test ./...
+
+      - name: Run simple example
+        working-directory: examples/simple
+        run: go run .
+
+      - name: Run advanced example
+        working-directory: examples/advanced
+        run: go run .

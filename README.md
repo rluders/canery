@@ -172,6 +172,16 @@ decisions, err := engine.BatchCheck(ctx, []canery.Request{
 })
 ```
 
+The repo keeps two curated runnable examples under [`examples/`](examples):
+[`examples/simple`](examples/simple) for the minimal core API flow, and
+[`examples/advanced`](examples/advanced) for a more application-shaped setup
+with users, projects, documents, roles, and UUID-shaped IDs.
+
+Each example is its own Go module with its own `go.mod`, so it imports
+`github.com/rluders/canery` like a real consumer would. The advanced example
+keeps its realistic in-memory store and tests alongside the runnable module so
+the example stays self-contained.
+
 If you want to group rules around a resource type or another higher-level
 concept, you can wrap the base authorizer with optional policies:
 
