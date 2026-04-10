@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	"serverdrivenui/backend/canery"
-	"serverdrivenui/backend/canery/examples/support"
+	"github.com/rluders/canery"
+	"github.com/rluders/canery/examples/support"
 )
 
 func main() {

@@ -264,7 +264,7 @@ still building plain `canery` requests underneath:
 ```go
 package projectauthz
 
-import "github.com/example/canery"
+import "github.com/rluders/canery"
 
 const EditDocument = canery.Action("edit")
 

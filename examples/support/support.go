@@ -3,7 +3,7 @@ package support
 import (
 	"context"
 
-	"serverdrivenui/backend/canery"
+	"github.com/rluders/canery"
 )
 
 // Config controls the generic example engine behavior.
