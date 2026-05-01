@@ -2,67 +2,56 @@
   <img src="docs/assets/canery-logo.png" alt="canery logo">
 </p>
 
-<p align="center">
-  <a href="https://github.com/rluders/canery/actions/workflows/ci.yml">
-    <img src="https://github.com/rluders/canery/actions/workflows/ci.yml/badge.svg" alt="CI">
-  </a>
-  <a href="https://go.dev/doc/devel/release#go1.24.2">
-    <img src="https://img.shields.io/badge/go-1.24.2-00ADD8?logo=go&logoColor=white" alt="Go 1.24.2">
-  </a>
-  <a href="LICENSE">
-    <img src="https://img.shields.io/badge/license-MIT-green.svg" alt="MIT License">
-  </a>
-</p>
+[![CI](https://github.com/rluders/canery/actions/workflows/ci.yml/badge.svg)](https://github.com/rluders/canery/actions/workflows/ci.yml)
+![Go](https://img.shields.io/badge/go-1.24+-00ADD8?logo=go&logoColor=white)
+[![Go Reference](https://pkg.go.dev/badge/github.com/rluders/canery.svg)](https://pkg.go.dev/github.com/rluders/canery)
+[![Go Report Card](https://goreportcard.com/badge/github.com/rluders/canery)](https://goreportcard.com/report/github.com/rluders/canery)
+[![GitHub release](https://img.shields.io/github/v/release/rluders/canery?sort=semver)](https://github.com/rluders/canery/releases)
+[![codecov](https://codecov.io/gh/rluders/canery/graph/badge.svg)](https://codecov.io/gh/rluders/canery)
+[![License](https://img.shields.io/github/license/rluders/canery)](LICENSE)
+![stdlib-only](https://img.shields.io/badge/dependencies-stdlib--only-blue)
 
-`canery` is a small authorization core built around checks shaped as:
+## 🧠 What is canery?
 
-- `subject`
-- `action`
-- `resource`
-- `scope`
+`canery` is a **minimal, generic authorization engine** built around a simple and explicit model:
 
-It stays generic on purpose:
-- it is not a full IAM system
-- it does not store permissions by itself
-- it does not define product semantics such as workspace, organization, or task
+* **subject**
+* **action**
+* **resource**
+* **scope**
 
-Authorization data comes from pluggable readers and resolvers. Product
-semantics belong in thin adapter packages outside the core package.
+It focuses purely on **authorization evaluation**, not storage or product semantics.
 
-`Engine` is the default shipped evaluator. It applies one membership-scoped
-pipeline over the generic request model, but it is not the only authorization
-strategy the package is meant to support over time.
+> It answers: *“Can X do Y on Z within W?”*
 
-## Design Goals
+## ⚡ Why use it?
 
-- Keep the low-level request model explicit
-- Provide a fluent builder for readability
-- Delegate storage and lookup to pluggable interfaces
-- Avoid hardcoding product semantics into the core engine
+Most authorization solutions are either:
 
-## Quick Start
+* too **opinionated** (roles, orgs, workspaces baked in)
+* too **heavy** (full IAM platforms)
 
-Direct request API:
+`canery` stays in the middle:
+
+* ✅ explicit and predictable request model
+* ✅ no framework or product lock-in
+* ✅ pluggable data sources
+* ✅ small, composable core
+* ✅ easy to test
+
+## 🚫 What it does NOT do
+
+* ❌ does not store permissions
+* ❌ does not define roles or org models
+* ❌ does not include a database layer
+* ❌ does not enforce product semantics
+
+You bring those via adapters.
+
+## 🚀 Quick Example
 
 ```go
 ok, err := authorizer.Check(ctx, canery.Request{
-  Subject:  canery.ActorRef{Type: "user", ID: userID},
-  Action:   canery.Action("delete"),
-  Resource: canery.ResourceRef{Type: "document", ID: documentID},
-  Scope:    canery.ScopeRef{Type: "project", ID: projectID},
-})
-```
-
-Preferred naming notes:
-- `ActorRef` is a readability alias for `Subject`
-- `Actor(...)` is the preferred generic helper; `User(...)` is only a convenience helper
-- `ResourceRef` and `ScopeRef` remain the explicit request types
-- `Target(...)` and `In(...)` are readability wrappers around `On(...)` and `Within(...)`
-
-If you want the explicit decision object instead of only the boolean outcome:
-
-```go
-decision, err := authorizer.CheckDecision(ctx, canery.Request{
   Subject:  canery.Actor("user", userID),
   Action:   canery.Action("delete"),
   Resource: canery.Resource("document", documentID),
@@ -70,7 +59,7 @@ decision, err := authorizer.CheckDecision(ctx, canery.Request{
 })
 ```
 
-`Decision` can carry a small generic explanation of the outcome:
+## 🔍 Decision Details
 
 ```go
 decision, err := authorizer.CheckDecision(ctx, canery.Request{
@@ -84,51 +73,11 @@ if decision.Allowed {
   fmt.Println(decision.Source) // "direct" or "group"
 } else {
   fmt.Println(decision.Source) // "none"
-  fmt.Println(decision.Reason) // generic explanation, such as "no matching permission"
+  fmt.Println(decision.Reason) // e.g. "no matching permission"
 }
 ```
 
-If you need lightweight debugging context, `CheckTrace` also returns the
-high-level evaluation path without logging anything automatically:
-
-```go
-decision, trace, err := authorizer.CheckTrace(ctx, canery.Request{
-  Subject:  canery.Actor("user", userID),
-  Action:   canery.Action("delete"),
-  Resource: canery.Resource("document", documentID),
-  Scope:    canery.Scope("project", projectID),
-})
-
-for _, step := range trace.Steps {
-  fmt.Println(step.Name, step.Result)
-}
-
-_ = decision
-```
-
-The same low-level request can also use thin helper constructors:
-
-```go
-ok, err := authorizer.Check(ctx, canery.Request{
-  Subject:  canery.Actor("user", userID),
-  Action:   canery.Action("delete"),
-  Resource: canery.Resource("document", documentID),
-  Scope:    canery.Scope("project", projectID),
-})
-```
-
-Fluent builder API:
-
-```go
-ok, err := authorizer.
-  For(canery.ActorRef{Type: "user", ID: userID}).
-  Can(canery.Action("delete")).
-  Target(canery.ResourceRef{Type: "document", ID: documentID}).
-  In(canery.ScopeRef{Type: "project", ID: projectID}).
-  Check(ctx)
-```
-
-Builder calls can also use the same helper constructors:
+## 🧱 Fluent API
 
 ```go
 ok, err := authorizer.
@@ -139,13 +88,16 @@ ok, err := authorizer.
   Check(ctx)
 ```
 
-For the same subject/resource/scope, you can also evaluate multiple actions at
-once:
+## 🔁 Multiple Actions
 
 ```go
 result, err := authorizer.
   For(canery.Actor("user", userID)).
-  CanMany(canery.Action("view"), canery.Action("update"), canery.Action("delete")).
+  CanMany(
+    canery.Action("view"),
+    canery.Action("update"),
+    canery.Action("delete"),
+  ).
   Target(canery.Resource("document", documentID)).
   In(canery.Scope("project", projectID)).
   Check(ctx)
@@ -153,7 +105,7 @@ result, err := authorizer.
 canUpdate, _ := result.Allowed(canery.Action("update"))
 ```
 
-For repeated low-level checks, the engine also exposes a batch API:
+## 📦 Batch Checks
 
 ```go
 decisions, err := engine.BatchCheck(ctx, []canery.Request{
@@ -172,78 +124,26 @@ decisions, err := engine.BatchCheck(ctx, []canery.Request{
 })
 ```
 
-The repo keeps two curated runnable examples under [`examples/`](examples):
-[`examples/simple`](examples/simple) for the minimal core API flow, and
-[`examples/advanced`](examples/advanced) for a more application-shaped setup
-with users, projects, documents, roles, and UUID-shaped IDs.
-
-Each example is its own Go module with its own `go.mod`, so it imports
-`github.com/rluders/canery` like a real consumer would. The advanced example
-keeps its realistic in-memory store and tests alongside the runnable module so
-the example stays self-contained.
-
-If you want to group rules around a resource type or another higher-level
-concept, you can wrap the base authorizer with optional policies:
+## 🧪 Debugging (Trace)
 
 ```go
-authorizer := canery.NewPolicyAuthorizer(
-  baseAuthorizer,
-  canery.ForResourceType("document", canery.PolicyFunc(func(ctx context.Context, request canery.Request, next canery.DecisionEvaluator) (canery.Decision, error) {
-    if request.Action == canery.Action("archive") {
-      return canery.Decision{
-        Allowed: false,
-        Reason:  "policy matched",
-        Source:  canery.DecisionSourceNone,
-      }, nil
-    }
-    return next.CheckDecision(ctx, request)
-  })),
-)
+decision, trace, err := authorizer.CheckTrace(ctx, canery.Request{
+  Subject:  canery.Actor("user", userID),
+  Action:   canery.Action("delete"),
+  Resource: canery.Resource("document", documentID),
+  Scope:    canery.Scope("project", projectID),
+})
+
+for _, step := range trace.Steps {
+  fmt.Println(step.Name, step.Result)
+}
+
+_ = decision
 ```
 
-Other generic match helpers are also available when policy organization wants
-to follow a resource, scope, or action-oriented shape:
+## ⚙️ Default Evaluation Strategy
 
-```go
-authorizer := canery.NewPolicyAuthorizer(
-  baseAuthorizer,
-  canery.ForScopeType("project", projectPolicy),
-  canery.ForActionOnResourceType(canery.Action("archive"), "document", archivePolicy),
-)
-```
-
-These helpers stay additive and matcher-based. They are meant to improve policy
-organization, not to introduce framework conventions or policy auto-discovery.
-
-`ResourceRef.ID` may be empty for create-style checks where the resource does
-not exist yet.
-
-Validation stays strict for required fields:
-- `subject` requires both `Type` and `ID`
-- `action` requires a non-empty value
-- `resource` requires `Type`
-- `scope` requires both `Type` and `ID`
-
-When validation fails, the engine returns a structured `ValidationError` that
-still satisfies `errors.Is(err, canery.ErrInvalidRequest)`.
-
-## Architecture
-
-```mermaid
-flowchart LR
-  B[Builder] --> A[Authorizer]
-  A --> PA[PolicyAuthorizer]
-  A --> E[Engine]
-  PA --> E
-  B --> R[Request]
-  R --> A
-  E --> M[MembershipReader]
-  E --> G[GroupReader]
-  E --> PR[PermissionReader]
-  E --> S[ResourceScopeResolver]
-```
-
-## Evaluation Flow
+The default `Engine` uses a **membership-first evaluation flow**:
 
 ```mermaid
 flowchart TD
@@ -265,31 +165,68 @@ flowchart TD
   K -- no --> L[Deny]
 ```
 
-This is the default `Engine` flow, not a statement that every future
-`canery.Authorizer` must evaluate requests in exactly this order.
+This is just the default engine — other evaluation strategies can be implemented.
 
-## Reader And Resolver Contracts
+## 🧩 Architecture
 
-- `MembershipReader`
-  Confirms whether the subject belongs to the requested scope.
-- `GroupReader`
-  Resolves the groups the subject belongs to within that scope.
-- `PermissionReader`
-  Resolves allow decisions for direct subjects and groups.
-- `ResourceScopeResolver`
-  Confirms that a concrete resource belongs to the requested scope.
+```mermaid
+flowchart LR
+  B[Builder] --> A[Authorizer]
+  A --> PA[PolicyAuthorizer]
+  A --> E[Engine]
+  PA --> E
+  B --> R[Request]
+  R --> A
+  E --> M[MembershipReader]
+  E --> G[GroupReader]
+  E --> PR[PermissionReader]
+  E --> S[ResourceScopeResolver]
+```
 
-The engine does not store permissions internally and does not talk directly to a
-database or service. Those concerns belong to the reader and resolver
-implementations.
+## 🔌 Extensibility
 
-## Generic Core vs App Adapters
+All data access is delegated to interfaces:
 
-Keep `canery` generic and move application ergonomics into a separate adapter
-package owned by the application using it.
+* `MembershipReader`
+* `GroupReader`
+* `PermissionReader`
+* `ResourceScopeResolver`
 
-The adapter layer should stay thin. It mostly gives names to app concepts while
-still building plain `canery` requests underneath:
+This keeps the core:
+
+* stateless
+* storage-agnostic
+* easy to test
+
+## 🧠 Policies (Optional)
+
+```go
+authorizer := canery.NewPolicyAuthorizer(
+  baseAuthorizer,
+  canery.ForResourceType("document", canery.PolicyFunc(func(ctx context.Context, request canery.Request, next canery.DecisionEvaluator) (canery.Decision, error) {
+    if request.Action == canery.Action("archive") {
+      return canery.Decision{
+        Allowed: false,
+        Reason:  "policy matched",
+        Source:  canery.DecisionSourceNone,
+      }, nil
+    }
+    return next.CheckDecision(ctx, request)
+  })),
+)
+```
+
+Policies are:
+
+* additive
+* matcher-based
+* optional
+
+They **do not introduce framework conventions or magic**.
+
+## 🧱 Adapter Pattern (Recommended)
+
+Keep your application semantics outside the core:
 
 ```go
 package projectauthz
@@ -311,7 +248,7 @@ func Document(id string) canery.ResourceRef {
 }
 ```
 
-That keeps the core reusable while still making call sites pleasant:
+Usage:
 
 ```go
 ok, err := authorizer.
@@ -322,11 +259,37 @@ ok, err := authorizer.
   Check(ctx)
 ```
 
-Non-user subjects, alternate storage backends, and evaluators that are not
-membership-first are all valid uses of the core package. Those variations
-should be expressed through adapters and alternate evaluators, not by pushing
-application semantics into `canery`.
+## 📂 Examples
 
-## License
+* `examples/simple` → minimal core usage
+* `examples/advanced` → realistic app setup (users, projects, roles, etc.)
+
+Each example is a standalone Go module.
+
+## ⚠️ Validation Rules
+
+* `subject` → requires `Type` and `ID`
+* `action` → must be non-empty
+* `resource` → requires `Type`
+* `scope` → requires `Type` and `ID`
+
+Invalid requests return a structured `ValidationError`
+(`errors.Is(err, canery.ErrInvalidRequest)` still works)
+
+## 🎯 When to use canery
+
+Use it when you want:
+
+* explicit, testable authorization logic
+* full control over your data model
+* no framework constraints
+
+Avoid it if you need:
+
+* a complete IAM system
+* UI, policy language, or managed service
+* out-of-the-box RBAC/ABAC models
+
+## 📄 License
 
 MIT
