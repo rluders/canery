@@ -259,6 +259,13 @@ ok, err := authorizer.
   Check(ctx)
 ```
 
+## 🔒 Concurrency
+
+* `Engine` and `PolicyAuthorizer` are immutable after construction and safe to share across goroutines.
+* `Builder` and `MultiActionBuilder` are value types; every method returns a copy, so they are safe to reuse and branch.
+* `BatchCheck` and multi-action checks run sequentially; canery does not call readers concurrently on its own.
+* Readers, resolvers, wrapped authorizers, and Policies must be concurrency-safe themselves when shared. Policies should be stateless.
+
 ## 📂 Examples
 
 * `examples/simple` → minimal core usage
