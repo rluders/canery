@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/rluders/canery"
+	"github.com/rluders/canery/v2"
 )
 
 func seededStore() *Store {

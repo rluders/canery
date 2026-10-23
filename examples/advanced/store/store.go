@@ -3,7 +3,7 @@ package store
 import (
 	"context"
 
-	"github.com/rluders/canery"
+	"github.com/rluders/canery/v2"
 )
 
 const (
