@@ -198,16 +198,27 @@ This is just the default engine — other evaluation strategies can be implement
 
 ```mermaid
 flowchart LR
-  B[Builder] --> A[Authorizer]
-  A --> PA[PolicyAuthorizer]
-  A --> E[Engine]
-  PA --> E
-  B --> R[Request]
-  R --> A
-  E --> M[MembershipReader]
-  E --> G[GroupReader]
-  E --> PR[PermissionReader]
-  E --> S[ResourceScopeResolver]
+  App["Application"] -->|"For(subject)...Check(ctx)"| B["Builder"]
+  App -->|"Check(ctx, Request)"| A
+  B -->|"builds Request"| A
+  subgraph Authorizers["Authorizer implementations"]
+    A{{"Authorizer interface"}}
+    PA["PolicyAuthorizer"]
+    E["Engine"]
+  end
+  A -.->|"implemented by"| PA
+  A -.->|"implemented by"| E
+  PA -->|"Policies, then next"| E
+  subgraph Readers["Readers (your adapters)"]
+    M["MembershipReader"]
+    G["GroupReader"]
+    PR["PermissionReader / BatchPermissionReader"]
+    S["ResourceScopeResolver"]
+  end
+  E --> M
+  E --> G
+  E --> PR
+  E --> S
 ```
 
 ## 🔌 Extensibility
