@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/rluders/canery"
+	"github.com/rluders/canery/v2"
 )
 
 func seededStore() *Store {
@@ -135,4 +135,33 @@ func ExampleDocumentAuthorizer() {
 	// ada@example.com delete Launch Plan => allowed=true source=direct
 	// grace@example.com update Launch Plan => allowed=true source=group
 	// linus@example.com publish Launch Plan => allowed=false source=none
+}
+
+func TestStoreBatchPermissionsMatchSingleChecks(t *testing.T) {
+	store := seededStore()
+	var _ canery.BatchPermissionReader = store
+
+	checks := []canery.PermissionCheck{}
+	for _, grant := range store.permissions {
+		for _, action := range []canery.Action{grant.Action, "unknown"} {
+			checks = append(checks, canery.PermissionCheck{
+				Principal: canery.PrincipalRef{Kind: grant.PrincipalKind, ID: grant.PrincipalID},
+				Request: canery.Request{
+					Action:   action,
+					Resource: canery.Resource(grant.ResourceType, ""),
+					Scope:    canery.Scope(scopeTypeProject, grant.ProjectID),
+				},
+			})
+		}
+	}
+	results, err := store.HasPermissions(context.Background(), checks)
+	if err != nil || len(results) != len(checks) {
+		t.Fatalf("HasPermissions = %d results, %v", len(results), err)
+	}
+	for index, check := range checks {
+		want, _ := store.HasPermission(context.Background(), check.Principal, check.Request)
+		if results[index].Allowed != want {
+			t.Fatalf("check %d = %v, want %v", index, results[index].Allowed, want)
+		}
+	}
 }

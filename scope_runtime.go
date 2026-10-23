@@ -1,7 +1,5 @@
 package canery
 
-import "context"
-
 // scopeContext is the engine's internal representation of the request scope.
 //
 // Today it is just a thin wrapper around one ScopeRef. Keeping it separate from
@@ -30,22 +28,4 @@ func (s scopeContext) targetScope() ScopeRef {
 // scope.
 func (s scopeContext) requiresResourceScopeCheck(resource ResourceRef) bool {
 	return resource.ID != ""
-}
-
-func (e *Engine) ensureResourceInScope(ctx context.Context, scope scopeContext, resource ResourceRef) (bool, error) {
-	if !scope.requiresResourceScopeCheck(resource) {
-		return true, nil
-	}
-	if e.resolver == nil {
-		return false, ErrMissingScopeResolver
-	}
-	return e.resolver.ResourceInScope(ctx, resource, scope.targetScope())
-}
-
-func (e *Engine) hasSubjectMembership(ctx context.Context, subject Subject, scope scopeContext) (bool, error) {
-	return e.memberships.HasMembership(ctx, subject, scope.targetScope())
-}
-
-func (e *Engine) groupsForSubject(ctx context.Context, subject Subject, scope scopeContext) ([]GroupRef, error) {
-	return e.groups.GroupsForSubject(ctx, subject, scope.targetScope())
 }

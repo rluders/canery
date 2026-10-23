@@ -19,7 +19,21 @@
 //
 // Engine is the default shipped evaluator. It applies one membership-scoped
 // evaluation pipeline over the shared request model, but the model itself is
-// intended to remain broad enough for alternate evaluators later.
+// intended to remain broad enough for alternate evaluators later. Single
+// checks and batches (BatchCheck, BatchCheckResults) share that pipeline;
+// batches deduplicate identical reader lookups and use BatchPermissionReader
+// when a permission reader provides it.
+//
+// Decisions explain themselves through Decision.Source, Decision.Reason, and
+// Decision.Principal; CheckTrace returns a structured Trace. Reader failures
+// are reported as EvaluationError and are never converted into denials.
+// Request.Context carries an opaque AuthorizationContext for Policies; the
+// Engine never interprets it and it never appears in decisions, traces, or
+// errors.
+//
+// Detailed contracts live in the repository's docs directory: the
+// authorization model and invariants, Policy semantics, batch semantics,
+// diagnostics, adapter guidance, and Architecture Decision Records.
 //
 // # Concurrency and thread safety
 //
@@ -38,9 +52,10 @@
 // Request values passed into a call are copied; readers, resolvers, and
 // Policies receive their own copies and must treat them as read-only inputs.
 //
-// Engine.BatchCheck and MultiActionBuilder.Check evaluate their items
-// sequentially on the calling goroutine, so canery itself never issues
-// concurrent reader calls for a single batch.
+// Engine.BatchCheck, Engine.BatchCheckResults, and MultiActionBuilder.Check
+// evaluate their items sequentially on the calling goroutine, so canery itself
+// never issues concurrent reader calls for a single batch. Lookups are
+// memoised only for the duration of one call.
 //
 // These guarantees cover canery's own types only. Implementations of
 // MembershipReader, GroupReader, PermissionReader, ResourceScopeResolver, the

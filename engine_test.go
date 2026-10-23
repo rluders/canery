@@ -173,10 +173,10 @@ func TestEngineCheckTraceRecordsDirectAllowFlow(t *testing.T) {
 		t.Fatalf("expected direct allow decision, got %+v", decision)
 	}
 	assertTraceSteps(t, trace, []TraceStep{
-		{Name: traceStepRequestValidated, Result: "passed"},
-		{Name: traceStepResourceScopeVerified, Result: "passed"},
-		{Name: traceStepMembershipConfirmed, Result: "passed"},
-		{Name: traceStepDirectChecked, Result: "matched"},
+		{Name: TraceStepRequestValidated, Result: "passed"},
+		{Name: TraceStepResourceScopeVerified, Result: "passed"},
+		{Name: TraceStepMembershipConfirmed, Result: "passed"},
+		{Name: TraceStepDirectChecked, Result: "matched", Principal: SubjectPrincipal(Subject{Type: "user", ID: "user-1"}), Source: DecisionSourceDirect},
 	})
 }
 
@@ -334,12 +334,12 @@ func TestEngineCheckTraceRecordsGroupAllowFlow(t *testing.T) {
 		t.Fatalf("expected group allow decision, got %+v", decision)
 	}
 	assertTraceSteps(t, trace, []TraceStep{
-		{Name: traceStepRequestValidated, Result: "passed"},
-		{Name: traceStepResourceScopeVerified, Result: "passed"},
-		{Name: traceStepMembershipConfirmed, Result: "passed"},
-		{Name: traceStepDirectChecked, Result: "not_matched"},
-		{Name: traceStepGroupsResolved, Result: "resolved"},
-		{Name: traceStepGroupChecked, Result: "matched"},
+		{Name: TraceStepRequestValidated, Result: "passed"},
+		{Name: TraceStepResourceScopeVerified, Result: "passed"},
+		{Name: TraceStepMembershipConfirmed, Result: "passed"},
+		{Name: TraceStepDirectChecked, Result: "not_matched", Principal: SubjectPrincipal(Subject{Type: "user", ID: "user-1"})},
+		{Name: TraceStepGroupsResolved, Result: "resolved"},
+		{Name: TraceStepGroupChecked, Result: "matched", Principal: GroupPrincipal(group), Source: DecisionSourceGroup},
 	})
 }
 
@@ -495,7 +495,7 @@ func TestEngineCheckReturnsValidationErrorForInvalidAction(t *testing.T) {
 		Resource: Resource("task", "task-1"),
 		Scope:    Scope("workspace", "workspace-1"),
 	})
-	assertValidationError(t, err, "action", "required")
+	assertValidationError(t, err, "action", "", "required")
 }
 
 func TestEngineCheckReturnsValidationErrorForInvalidResource(t *testing.T) {
@@ -507,7 +507,7 @@ func TestEngineCheckReturnsValidationErrorForInvalidResource(t *testing.T) {
 		Resource: ResourceRef{},
 		Scope:    Scope("workspace", "workspace-1"),
 	})
-	assertValidationError(t, err, "resource", "required")
+	assertValidationError(t, err, "resource", "type", "required")
 }
 
 func TestEngineCheckReturnsValidationErrorForInvalidScope(t *testing.T) {
@@ -519,7 +519,7 @@ func TestEngineCheckReturnsValidationErrorForInvalidScope(t *testing.T) {
 		Resource: Resource("task", "task-1"),
 		Scope:    ScopeRef{Type: "workspace"},
 	})
-	assertValidationError(t, err, "scope", "required")
+	assertValidationError(t, err, "scope", "id", "required")
 }
 
 func TestEngineCheckAllowsCreateStyleRequestWithEmptyResourceID(t *testing.T) {
@@ -619,12 +619,12 @@ func TestEngineCheckTraceRecordsDenyFlow(t *testing.T) {
 		t.Fatalf("expected denied decision, got %+v", decision)
 	}
 	assertTraceSteps(t, trace, []TraceStep{
-		{Name: traceStepRequestValidated, Result: "passed"},
-		{Name: traceStepResourceScopeVerified, Result: "passed"},
-		{Name: traceStepMembershipConfirmed, Result: "passed"},
-		{Name: traceStepDirectChecked, Result: "not_matched"},
-		{Name: traceStepGroupsResolved, Result: "none"},
-		{Name: traceStepGroupChecked, Result: "not_matched"},
+		{Name: TraceStepRequestValidated, Result: "passed"},
+		{Name: TraceStepResourceScopeVerified, Result: "passed"},
+		{Name: TraceStepMembershipConfirmed, Result: "passed"},
+		{Name: TraceStepDirectChecked, Result: "not_matched", Principal: SubjectPrincipal(Subject{Type: "user", ID: "user-1"})},
+		{Name: TraceStepGroupsResolved, Result: "none"},
+		{Name: TraceStepGroupChecked, Result: "not_matched", Source: DecisionSourceNone},
 	})
 }
 
@@ -748,7 +748,7 @@ func assertTraceSteps(t *testing.T, trace Trace, want []TraceStep) {
 	}
 }
 
-func assertValidationError(t *testing.T, err error, field string, code string) {
+func assertValidationError(t *testing.T, err error, field string, property string, code string) {
 	t.Helper()
 	if !errors.Is(err, ErrInvalidRequest) {
 		t.Fatalf("expected invalid request error, got %v", err)
@@ -757,10 +757,17 @@ func assertValidationError(t *testing.T, err error, field string, code string) {
 	if !errors.As(err, &validationErr) {
 		t.Fatalf("expected validation error, got %T", err)
 	}
-	if validationErr.Field != field || validationErr.Code != code {
+	if validationErr.Field != field || validationErr.Property != property || validationErr.Code != code {
 		t.Fatalf("unexpected validation error %+v", validationErr)
 	}
-	if validationErr.Error() != "canery: invalid request: "+field+": "+code {
+	path := field
+	if property != "" {
+		path += "." + property
+	}
+	if validationErr.Path() != path {
+		t.Fatalf("unexpected validation path %q", validationErr.Path())
+	}
+	if validationErr.Error() != "canery: invalid request: "+path+": "+code {
 		t.Fatalf("unexpected validation error string %q", validationErr.Error())
 	}
 }

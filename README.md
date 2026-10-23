@@ -4,7 +4,7 @@
 
 [![CI](https://github.com/rluders/canery/actions/workflows/ci.yml/badge.svg)](https://github.com/rluders/canery/actions/workflows/ci.yml)
 ![Go](https://img.shields.io/badge/go-1.24+-00ADD8?logo=go&logoColor=white)
-[![Go Reference](https://pkg.go.dev/badge/github.com/rluders/canery.svg)](https://pkg.go.dev/github.com/rluders/canery)
+[![Go Reference](https://pkg.go.dev/badge/github.com/rluders/canery/v2.svg)](https://pkg.go.dev/github.com/rluders/canery/v2)
 [![Go Report Card](https://goreportcard.com/badge/github.com/rluders/canery)](https://goreportcard.com/report/github.com/rluders/canery)
 [![GitHub release](https://img.shields.io/github/v/release/rluders/canery?sort=semver)](https://github.com/rluders/canery/releases)
 [![codecov](https://codecov.io/gh/rluders/canery/graph/badge.svg)](https://codecov.io/gh/rluders/canery)
@@ -13,7 +13,7 @@
 
 ## 🧠 What is canery?
 
-`canery` is a **minimal, generic authorization engine** built around a simple and explicit model:
+`canery` is a **minimal, generic authorization kernel** built around a simple and explicit model:
 
 * **subject**
 * **action**
@@ -23,6 +23,8 @@
 It focuses purely on **authorization evaluation**, not storage or product semantics.
 
 > It answers: *“Can X do Y on Z within W?”*
+
+canery evaluates authorization; it does not own the systems that provide identity, resources, or authorization data. See [docs/architecture.md](docs/architecture.md).
 
 ## ⚡ Why use it?
 
@@ -48,6 +50,16 @@ Most authorization solutions are either:
 
 You bring those via adapters.
 
+## 📥 Install
+
+```sh
+go get github.com/rluders/canery/v2
+```
+
+```go
+import "github.com/rluders/canery/v2" // package canery
+```
+
 ## 🚀 Quick Example
 
 ```go
@@ -70,7 +82,9 @@ decision, err := authorizer.CheckDecision(ctx, canery.Request{
 })
 
 if decision.Allowed {
-  fmt.Println(decision.Source) // "direct" or "group"
+  fmt.Println(decision.Source) // canery.DecisionSourceDirect or canery.DecisionSourceGroup
+  principal, _ := decision.EffectivePrincipal()
+  fmt.Println(principal) // the subject, or the first matching group
 } else {
   fmt.Println(decision.Source) // "none"
   fmt.Println(decision.Reason) // e.g. "no matching permission"
@@ -107,6 +121,8 @@ canUpdate, _ := result.Allowed(canery.Action("update"))
 
 ## 📦 Batch Checks
 
+Batches are evaluated together: identical membership, group, resource-scope, and permission lookups run once, and permission readers that implement the optional `BatchPermissionReader` answer many checks in one call.
+
 ```go
 decisions, err := engine.BatchCheck(ctx, []canery.Request{
   {
@@ -122,7 +138,16 @@ decisions, err := engine.BatchCheck(ctx, []canery.Request{
     Scope:    canery.Scope("project", projectID),
   },
 })
+// All-or-nothing: on failure, err is a canery.BatchCheckError for the lowest failing index.
+
+// Keep partial results instead:
+for _, result := range engine.BatchCheckResults(ctx, requests) {
+  if result.Err != nil { /* could not be evaluated */ continue }
+  fmt.Println(result.Decision.Allowed)
+}
 ```
+
+See [docs/batch.md](docs/batch.md) for the full failure contract.
 
 ## 🧪 Debugging (Trace)
 
@@ -135,11 +160,13 @@ decision, trace, err := authorizer.CheckTrace(ctx, canery.Request{
 })
 
 for _, step := range trace.Steps {
-  fmt.Println(step.Name, step.Result)
+  fmt.Println(step.Name, step.Result, step.Principal, step.Source)
 }
 
 _ = decision
 ```
+
+Traces never include context values or reader error details. Reader failures surface as `canery.EvaluationError` (inspect the cause with `errors.Is` / `errors.As`). See [docs/diagnostics.md](docs/diagnostics.md).
 
 ## ⚙️ Default Evaluation Strategy
 
@@ -191,6 +218,7 @@ All data access is delegated to interfaces:
 * `GroupReader`
 * `PermissionReader`
 * `ResourceScopeResolver`
+* `BatchPermissionReader` (optional)
 
 This keeps the core:
 
@@ -218,11 +246,32 @@ authorizer := canery.NewPolicyAuthorizer(
 
 Policies are:
 
-* additive
-* matcher-based
+* middleware: delegate, short-circuit, or transform decisions
+* matcher-based and run in configured order
 * optional
 
-They **do not introduce framework conventions or magic**.
+There is **no** built-in deny/allow precedence. See [docs/policies.md](docs/policies.md).
+
+### Authorization context
+
+Policies can read application-defined values without framework types:
+
+```go
+type authMethodKey struct{}
+
+ok, err := authorizer.
+  For(canery.Actor("user", userID)).
+  Can(canery.Action("delete")).
+  Target(canery.Resource("document", documentID)).
+  In(canery.Scope("project", projectID)).
+  WithValue(authMethodKey{}, "mfa").
+  Check(ctx)
+
+// inside a Policy:
+method, _ := canery.ContextValue[string](request.Context, authMethodKey{})
+```
+
+The default engine never interprets context values, and they never appear in decisions, traces, or errors.
 
 ## 🧱 Adapter Pattern (Recommended)
 
@@ -231,7 +280,7 @@ Keep your application semantics outside the core:
 ```go
 package projectauthz
 
-import "github.com/rluders/canery"
+import "github.com/rluders/canery/v2"
 
 const EditDocument = canery.Action("edit")
 
@@ -267,6 +316,13 @@ ok, err := authorizer.
 * `Request`, `Decision`, and `Trace` are plain values owned by the caller; canery never retains or mutates them after returning.
 * Readers, resolvers, wrapped authorizers, and Policies must be concurrency-safe themselves when shared. canery does not serialize access to them. Policies should be stateless and must not assume sequential or goroutine-affine invocation.
 
+## 📚 Documentation
+
+* [Authorization model & invariants](docs/authorization-model.md)
+* [Architecture](docs/architecture.md) · [Policies](docs/policies.md) · [Batch](docs/batch.md)
+* [Diagnostics](docs/diagnostics.md) · [Adapters & performance](docs/adapters.md)
+* [Architecture Decision Records](docs/adr/README.md) · [Migrating to v2](docs/migrating-to-v2.md)
+
 ## 📂 Examples
 
 * `examples/simple` → minimal core usage
@@ -276,13 +332,17 @@ Each example is a standalone Go module.
 
 ## ⚠️ Validation Rules
 
-* `subject` → requires `Type` and `ID`
-* `action` → must be non-empty
-* `resource` → requires `Type`
-* `scope` → requires `Type` and `ID`
+Checked in this order; the first failure is returned:
 
-Invalid requests return a structured `ValidationError`
-(`errors.Is(err, canery.ErrInvalidRequest)` still works)
+| `Path()` | Rule |
+| --- | --- |
+| `subject.type`, `subject.id` | non-blank |
+| `action` | non-blank |
+| `resource.type` | non-blank (`ID` optional: empty means a type-level check) |
+| `scope.type`, `scope.id` | non-blank |
+
+Invalid requests return a `ValidationError{Field, Property, Code}`
+(`errors.Is(err, canery.ErrInvalidRequest)` works from every entry point).
 
 ## 🎯 When to use canery
 

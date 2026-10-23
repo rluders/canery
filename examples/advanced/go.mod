@@ -2,6 +2,6 @@ module github.com/rluders/canery-examples/advanced
 
 go 1.24.2
 
-require github.com/rluders/canery v0.0.0
+require github.com/rluders/canery/v2 v2.0.0
 
-replace github.com/rluders/canery => ../../
+replace github.com/rluders/canery/v2 => ../../

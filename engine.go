@@ -19,15 +19,9 @@ var (
 	// ErrMissingScopeResolver indicates that the engine cannot validate a
 	// concrete resource against a scope because no resolver was configured.
 	ErrMissingScopeResolver = errors.New("canery: missing resource scope resolver")
-)
-
-const (
-	// DecisionSourceDirect indicates that a direct subject permission matched.
-	DecisionSourceDirect = "direct"
-	// DecisionSourceGroup indicates that a group-derived permission matched.
-	DecisionSourceGroup = "group"
-	// DecisionSourceNone indicates that no permission source produced an allow.
-	DecisionSourceNone = "none"
+	// ErrBatchResultMismatch indicates that a BatchPermissionReader returned a
+	// different number of results than checks.
+	ErrBatchResultMismatch = errors.New("canery: batch permission reader returned mismatched results")
 )
 
 const (
@@ -38,14 +32,9 @@ const (
 	decisionReasonNoPermission     = "no matching permission"
 )
 
-const (
-	traceStepRequestValidated      = "request_validated"
-	traceStepResourceScopeVerified = "resource_scope_verified"
-	traceStepMembershipConfirmed   = "membership_confirmed"
-	traceStepDirectChecked         = "direct_permission_checked"
-	traceStepGroupsResolved        = "groups_resolved"
-	traceStepGroupChecked          = "group_permissions_checked"
-)
+// ValidationCodeRequired is the ValidationError code for a missing or
+// whitespace-only field.
+const ValidationCodeRequired = "required"
 
 // BatchCheckError identifies the request that caused a batch evaluation to
 // fail.
@@ -64,18 +53,69 @@ func (e BatchCheckError) Unwrap() error {
 }
 
 // ValidationError identifies a specific invalid request field with a stable
-// field/code pair.
+// field/property/code triple.
+//
+// Field is the request component ("subject", "action", "resource", or
+// "scope"). Property is the component property ("type" or "id"), or empty when
+// the component itself is the value (action). Code is ValidationCodeRequired.
+// Validation stops at the first failure, checked in this order: subject.type,
+// subject.id, action, resource.type, scope.type, scope.id.
 type ValidationError struct {
-	Field string
-	Code  string
+	Field    string
+	Property string
+	Code     string
+}
+
+// Path returns the dotted field path, such as "subject.id" or "action".
+func (e ValidationError) Path() string {
+	if e.Property == "" {
+		return e.Field
+	}
+	return e.Field + "." + e.Property
 }
 
 func (e ValidationError) Error() string {
-	return fmt.Sprintf("canery: invalid request: %s: %s", e.Field, e.Code)
+	return fmt.Sprintf("canery: invalid request: %s: %s", e.Path(), e.Code)
 }
 
 func (e ValidationError) Unwrap() error {
 	return ErrInvalidRequest
+}
+
+// EvaluationError reports that a reader or resolver failed while evaluating a
+// request.
+//
+// Stage is the TraceStep* name of the failing stage. Error() deliberately
+// omits the underlying message so infrastructure details (queries, hosts,
+// credentials) do not leak through canery's error strings; use errors.Is,
+// errors.As, or Unwrap to inspect the cause.
+type EvaluationError struct {
+	Stage string
+	Err   error
+}
+
+func (e EvaluationError) Error() string {
+	return "canery: evaluation failed at " + e.Stage
+}
+
+func (e EvaluationError) Unwrap() error {
+	return e.Err
+}
+
+// BatchResult is the outcome of one request in a batch. Err is nil when
+// Decision holds an evaluated outcome (allowed or denied); otherwise the
+// request could not be evaluated and Decision is zero.
+type BatchResult struct {
+	Request  Request
+	Decision Decision
+	Err      error
+}
+
+// BatchAuthorizer is implemented by authorizers that can evaluate several
+// requests together. Engine and PolicyAuthorizer implement it, and
+// MultiActionBuilder.Check uses it when available.
+type BatchAuthorizer interface {
+	BatchCheckResults(ctx context.Context, requests []Request) []BatchResult
 }
 
 // Engine is the default Authorizer implementation backed by pluggable readers
@@ -84,7 +124,8 @@ func (e ValidationError) Unwrap() error {
 // Engine intentionally implements one default evaluation strategy: a
 // membership-scoped pipeline that validates the request, optionally checks a
 // concrete resource against the requested scope, confirms scope membership, and
-// then evaluates direct and group-based permissions.
+// then evaluates direct and group-based permissions. See
+// docs/authorization-model.md for the full contract.
 //
 // The request model and readers are broader than this one strategy. Future
 // evaluators can reuse the same Request, Decision, and reader interfaces while
@@ -122,20 +163,22 @@ func (e *Engine) For(subject Subject) Builder {
 //  2. verify resource-to-scope membership when a resource ID is provided
 //  3. verify subject membership in the scope
 //  4. check direct subject permissions
-//  5. resolve groups and check group permissions
+//  5. resolve groups and check group permissions in reader order
 //
 // The first matching allow returns an allowed Decision. Missing matches return
-// a denied Decision. The engine does not implement deny rules or policy
-// precedence beyond this order.
+// a denied Decision. Reader failures return an EvaluationError and never a
+// denial. The engine does not implement deny rules or policy precedence beyond
+// this order.
 func (e *Engine) CheckDecision(ctx context.Context, request Request) (Decision, error) {
-	decision, _, err := e.evaluate(ctx, request)
+	decision, _, err := e.evaluate(ctx, request, false)
 	return decision, err
 }
 
 // CheckTrace evaluates a request and also returns a high-level trace that can
-// help callers debug how the final decision was reached.
+// help callers debug how the final decision was reached. On error the trace
+// contains the steps completed so far, ending with the failing step.
 func (e *Engine) CheckTrace(ctx context.Context, request Request) (Decision, Trace, error) {
-	return e.evaluate(ctx, request)
+	return e.evaluate(ctx, request, true)
 }
 
 // Check evaluates a low-level request directly and preserves the original
@@ -148,164 +191,78 @@ func (e *Engine) Check(ctx context.Context, request Request) (bool, error) {
 	return decision.Allowed, nil
 }
 
-// BatchCheck evaluates a slice of requests and returns one explicit decision
-// per request.
+// BatchCheck evaluates a slice of requests and returns one decision per
+// request, in input order.
 //
-// It reuses the same validation and evaluation path as Check. If a request is
-// invalid, BatchCheck stops and returns a BatchCheckError identifying the
-// failing item.
+// It is all-or-nothing: every request is validated before any reader is
+// called, and if any request is invalid or cannot be evaluated, BatchCheck
+// returns nil decisions and a BatchCheckError for the lowest failing index.
+// Denials are not failures. Use BatchCheckResults to keep partial results.
 func (e *Engine) BatchCheck(ctx context.Context, requests []Request) ([]Decision, error) {
-	decisions := make([]Decision, 0, len(requests))
 	for index, request := range requests {
-		decision, err := e.CheckDecision(ctx, request)
-		if err != nil {
-			if errors.Is(err, ErrInvalidRequest) {
-				return nil, BatchCheckError{
-					Index:   index,
-					Request: request,
-					Err:     err,
-				}
-			}
-			return nil, err
+		if err := validateRequest(request); err != nil {
+			return nil, BatchCheckError{Index: index, Request: request, Err: err}
 		}
-		decisions = append(decisions, decision)
+	}
+	return decisionsOrError(e.BatchCheckResults(ctx, requests))
+}
+
+// BatchCheckResults evaluates requests together and returns one BatchResult
+// per request, in input order.
+//
+// Identical membership, group, resource-scope, and permission lookups are
+// performed once per call, and permission checks use BatchPermissionReader
+// when available. Each result is equivalent to calling CheckDecision on that
+// request alone. A failure affects only the requests that depended on the
+// failed lookup; other results are still returned. If ctx is cancelled,
+// requests that were not yet decided report the context error.
+func (e *Engine) BatchCheckResults(ctx context.Context, requests []Request) []BatchResult {
+	items := e.run(ctx, requests, false)
+	results := make([]BatchResult, len(items))
+	for index, item := range items {
+		results[index] = BatchResult{
+			Request:  item.request,
+			Decision: item.decision,
+			Err:      item.err,
+		}
+	}
+	return results
+}
+
+func (e *Engine) evaluate(ctx context.Context, request Request, withTrace bool) (Decision, Trace, error) {
+	item := e.run(ctx, []Request{request}, withTrace)[0]
+	return item.decision, item.trace, item.err
+}
+
+func decisionsOrError(results []BatchResult) ([]Decision, error) {
+	decisions := make([]Decision, len(results))
+	for index, result := range results {
+		if result.Err != nil {
+			return nil, BatchCheckError{Index: index, Request: result.Request, Err: result.Err}
+		}
+		decisions[index] = result.Decision
 	}
 	return decisions, nil
 }
 
-func (e *Engine) evaluate(ctx context.Context, request Request) (Decision, Trace, error) {
-	trace := Trace{}
-	if err := validateRequest(request); err != nil {
-		trace.add(traceStepRequestValidated, "failed")
-		return Decision{}, trace, err
-	}
-	trace.add(traceStepRequestValidated, "passed")
-
-	scope := newScopeContext(request)
-	pipeline := newDefaultEvaluationPipeline(e, request, scope, &trace)
-
-	if e.memberships == nil {
-		return Decision{}, trace, ErrMissingMembership
-	}
-	if e.groups == nil {
-		return Decision{}, trace, ErrMissingGroupReader
-	}
-	if e.permissions == nil {
-		return Decision{}, trace, ErrMissingPermissions
-	}
-	if pipeline.requiresResourceScopeCheck() {
-		inScope, err := pipeline.ensureResourceInScope(ctx)
-		if err != nil {
-			return Decision{}, trace, err
-		}
-		if !inScope {
-			trace.add(traceStepResourceScopeVerified, "denied")
-			return Decision{
-				Allowed: false,
-				Reason:  decisionReasonResourceScope,
-				Source:  DecisionSourceNone,
-			}, trace, nil
-		}
-		trace.add(traceStepResourceScopeVerified, "passed")
-	}
-
-	member, err := pipeline.hasSubjectMembership(ctx)
-	if err != nil {
-		return Decision{}, trace, err
-	}
-	if !member {
-		trace.add(traceStepMembershipConfirmed, "denied")
-		return Decision{
-			Allowed: false,
-			Reason:  decisionReasonMembership,
-			Source:  DecisionSourceNone,
-		}, trace, nil
-	}
-	trace.add(traceStepMembershipConfirmed, "passed")
-
-	allowed, err := e.permissions.HasPermission(ctx, SubjectPrincipal(request.Subject), request)
-	if err != nil {
-		return Decision{}, trace, err
-	}
-	if allowed {
-		trace.add(traceStepDirectChecked, "matched")
-		return Decision{
-			Allowed: true,
-			Reason:  decisionReasonDirectPermission,
-			Source:  DecisionSourceDirect,
-		}, trace, nil
-	}
-	trace.add(traceStepDirectChecked, "not_matched")
-
-	groups, err := pipeline.groupsForSubject(ctx)
-	if err != nil {
-		return Decision{}, trace, err
-	}
-	if len(groups) == 0 {
-		trace.add(traceStepGroupsResolved, "none")
-	} else {
-		trace.add(traceStepGroupsResolved, "resolved")
-	}
-
-	groupMatched := false
-	for _, group := range groups {
-		allowed, err := e.permissions.HasPermission(ctx, GroupPrincipal(group), request)
-		if err != nil {
-			return Decision{}, trace, err
-		}
-		if allowed {
-			groupMatched = true
-			break
-		}
-	}
-	if groupMatched {
-		trace.add(traceStepGroupChecked, "matched")
-		return Decision{
-			Allowed: true,
-			Reason:  decisionReasonGroupPermission,
-			Source:  DecisionSourceGroup,
-		}, trace, nil
-	}
-	trace.add(traceStepGroupChecked, "not_matched")
-
-	return Decision{
-		Allowed: false,
-		Reason:  decisionReasonNoPermission,
-		Source:  DecisionSourceNone,
-	}, trace, nil
-}
-
-func (t *Trace) add(name string, result string) {
-	t.Steps = append(t.Steps, TraceStep{
-		Name:   name,
-		Result: result,
-	})
-}
-
 func validateRequest(request Request) error {
-	if strings.TrimSpace(request.Subject.Type) == "" || strings.TrimSpace(request.Subject.ID) == "" {
-		return ValidationError{
-			Field: "subject",
-			Code:  "required",
-		}
-	}
-	if strings.TrimSpace(string(request.Action)) == "" {
-		return ValidationError{
-			Field: "action",
-			Code:  "required",
-		}
-	}
-	if strings.TrimSpace(request.Resource.Type) == "" {
-		return ValidationError{
-			Field: "resource",
-			Code:  "required",
-		}
-	}
-	if strings.TrimSpace(request.Scope.Type) == "" || strings.TrimSpace(request.Scope.ID) == "" {
-		return ValidationError{
-			Field: "scope",
-			Code:  "required",
-		}
+	switch {
+	case blank(request.Subject.Type):
+		return ValidationError{Field: "subject", Property: "type", Code: ValidationCodeRequired}
+	case blank(request.Subject.ID):
+		return ValidationError{Field: "subject", Property: "id", Code: ValidationCodeRequired}
+	case blank(string(request.Action)):
+		return ValidationError{Field: "action", Code: ValidationCodeRequired}
+	case blank(request.Resource.Type):
+		return ValidationError{Field: "resource", Property: "type", Code: ValidationCodeRequired}
+	case blank(request.Scope.Type):
+		return ValidationError{Field: "scope", Property: "type", Code: ValidationCodeRequired}
+	case blank(request.Scope.ID):
+		return ValidationError{Field: "scope", Property: "id", Code: ValidationCodeRequired}
 	}
 	return nil
+}
+
+func blank(value string) bool {
+	return strings.TrimSpace(value) == ""
 }

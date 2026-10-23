@@ -2,8 +2,6 @@ package canery
 
 import "context"
 
-const traceStepPolicyEvaluated = "policy_evaluated"
-
 // DecisionEvaluator is the minimal continuation interface used by policies to
 // delegate back to the next policy or the wrapped authorizer.
 type DecisionEvaluator interface {
@@ -12,12 +10,23 @@ type DecisionEvaluator interface {
 	CheckDecision(ctx context.Context, request Request) (Decision, error)
 }
 
-// Policy can wrap authorization decisions for a matched request before
-// delegating to the next evaluator.
+// Policy is evaluation middleware around an Authorizer.
 //
-// Policies are optional and compose on top of the core request-driven
-// authorizer. They can handle a request directly or call next.CheckDecision to
-// continue the evaluation chain.
+// A Policy receives the request and a continuation (next) and returns the
+// final Decision for its part of the chain. It may:
+//   - delegate: return next.CheckDecision(ctx, request) unchanged;
+//   - short-circuit: return its own Decision without calling next, which is a
+//     valid, final decision (allow or deny) for that request;
+//   - transform: call next and return a different Decision, in either
+//     direction (allow to deny or deny to allow);
+//   - fail: return an error, which propagates unchanged to the caller and is
+//     never converted into a denial.
+//
+// Policies run before the wrapped Authorizer, so they see requests that have
+// not been validated yet. There is no built-in deny-overrides or
+// allow-overrides precedence: the outermost matching Policy's returned value
+// is the result. Policies must be safe for concurrent use and must not call
+// next concurrently from multiple goroutines. See docs/policies.md.
 type Policy interface {
 	CheckDecision(ctx context.Context, request Request, next DecisionEvaluator) (Decision, error)
 }
@@ -88,8 +97,11 @@ func ForActionInScopeType(action Action, scopeType string, policy Policy) Policy
 // PolicyAuthorizer wraps an Authorizer with an ordered set of optional
 // policies.
 //
-// Policies run only when their binding matches the request. A matched policy
-// can return a decision directly or delegate to the next evaluator.
+// Bindings are evaluated in the order given to NewPolicyAuthorizer. Only
+// bindings whose matcher accepts the request run (a nil Match matches every
+// request; a nil Policy is skipped). The first matching binding runs first and
+// its next continues with the following matching binding, ending at the
+// wrapped Authorizer.
 type PolicyAuthorizer struct {
 	base     Authorizer
 	bindings []PolicyBinding
@@ -165,18 +177,67 @@ func (a *PolicyAuthorizer) checkTraceFrom(ctx context.Context, request Request, 
 		},
 	}
 	decision, err := binding.Policy.CheckDecision(ctx, request, next)
-	if err != nil {
-		return Decision{}, Trace{}, err
-	}
 
 	trace := Trace{}
+	switch {
+	case err != nil:
+		trace.Steps = append(trace.Steps, TraceStep{Name: TraceStepPolicyEvaluated, Result: TraceResultError})
+	case next.called:
+		trace.Steps = append(trace.Steps, TraceStep{Name: TraceStepPolicyEvaluated, Result: TraceResultDelegated})
+	default:
+		trace.Steps = append(trace.Steps, TraceStep{Name: TraceStepPolicyEvaluated, Result: TraceResultHandled, Source: decision.Source})
+	}
 	if next.called {
-		trace.add(traceStepPolicyEvaluated, "delegated")
 		trace.Steps = append(trace.Steps, next.trace.Steps...)
-	} else {
-		trace.add(traceStepPolicyEvaluated, "handled")
+		if err == nil && decision != next.decision {
+			trace.Steps = append(trace.Steps, TraceStep{Name: TraceStepPolicyEvaluated, Result: TraceResultOverridden, Source: decision.Source})
+		}
+	}
+	if err != nil {
+		return Decision{}, trace, err
 	}
 	return decision, trace, nil
+}
+
+// BatchCheckResults evaluates requests one result per request, in input
+// order. Requests matched by no binding are forwarded together to the wrapped
+// Authorizer when it implements BatchAuthorizer; every other request runs
+// through its policy chain individually.
+func (a *PolicyAuthorizer) BatchCheckResults(ctx context.Context, requests []Request) []BatchResult {
+	results := make([]BatchResult, len(requests))
+	direct := []int{}
+	for index, request := range requests {
+		results[index].Request = request
+		if _, _, matched := a.nextBinding(request, 0); !matched {
+			direct = append(direct, index)
+			continue
+		}
+		results[index].Decision, results[index].Err = a.CheckDecision(ctx, request)
+	}
+	if len(direct) == 0 {
+		return results
+	}
+	if batch, ok := a.base.(BatchAuthorizer); ok {
+		forwarded := make([]Request, len(direct))
+		for position, index := range direct {
+			forwarded[position] = requests[index]
+		}
+		for position, result := range batch.BatchCheckResults(ctx, forwarded) {
+			results[direct[position]] = result
+		}
+		return results
+	}
+	for _, index := range direct {
+		results[index].Decision, results[index].Err = a.CheckDecision(ctx, requests[index])
+	}
+	return results
+}
+
+// BatchCheck evaluates requests and returns one decision per request, in
+// input order. Like Engine.BatchCheck it is all-or-nothing and reports the
+// lowest failing index as a BatchCheckError.
+func (a *PolicyAuthorizer) BatchCheck(ctx context.Context, requests []Request) ([]Decision, error) {
+	return decisionsOrError(a.BatchCheckResults(ctx, requests))
 }
 
 func (a *PolicyAuthorizer) nextBinding(request Request, start int) (int, PolicyBinding, bool) {
@@ -201,14 +262,18 @@ func (c decisionContinuation) CheckDecision(ctx context.Context, request Request
 }
 
 type traceContinuation struct {
-	check  func(context.Context, Request) (Decision, Trace, error)
-	called bool
-	trace  Trace
+	check    func(context.Context, Request) (Decision, Trace, error)
+	called   bool
+	trace    Trace
+	decision Decision
 }
 
+// CheckDecision records the trace of the delegated evaluation. If a Policy
+// calls next more than once, the trace reflects the last call.
 func (c *traceContinuation) CheckDecision(ctx context.Context, request Request) (Decision, error) {
 	c.called = true
 	decision, trace, err := c.check(ctx, request)
 	c.trace = trace
+	c.decision = decision
 	return decision, err
 }

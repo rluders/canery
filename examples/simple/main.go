@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/rluders/canery"
+	"github.com/rluders/canery/v2"
 )
 
 type membershipReader struct{}

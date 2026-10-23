@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/rluders/canery"
 	db "github.com/rluders/canery-examples/advanced/store"
+	"github.com/rluders/canery/v2"
 )
 
 func main() {

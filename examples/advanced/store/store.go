@@ -3,7 +3,7 @@ package store
 import (
 	"context"
 
-	"github.com/rluders/canery"
+	"github.com/rluders/canery/v2"
 )
 
 const (
@@ -155,6 +155,30 @@ func (s *Store) HasPermission(_ context.Context, principal canery.PrincipalRef, 
 		}
 	}
 	return false, nil
+}
+
+// HasPermissions implements canery.BatchPermissionReader. A database-backed
+// store would answer all checks with one query (for example a join against a
+// VALUES list); here one pass over the grants answers every check.
+func (s *Store) HasPermissions(_ context.Context, checks []canery.PermissionCheck) ([]canery.PermissionResult, error) {
+	type grantKey struct {
+		kind         canery.PrincipalKind
+		principalID  string
+		action       canery.Action
+		resourceType string
+		projectID    string
+	}
+	granted := make(map[grantKey]bool, len(s.permissions))
+	for _, grant := range s.permissions {
+		granted[grantKey{grant.PrincipalKind, grant.PrincipalID, grant.Action, grant.ResourceType, grant.ProjectID}] = true
+	}
+	results := make([]canery.PermissionResult, len(checks))
+	for index, check := range checks {
+		request := check.Request
+		results[index].Allowed = request.Scope.Type == scopeTypeProject &&
+			granted[grantKey{check.Principal.Kind, check.Principal.ID, request.Action, request.Resource.Type, request.Scope.ID}]
+	}
+	return results, nil
 }
 
 func (s *Store) ResourceInScope(_ context.Context, resource canery.ResourceRef, scope canery.ScopeRef) (bool, error) {
