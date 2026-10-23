@@ -194,7 +194,7 @@ func TestPolicyAuthorizerCheckTraceIncludesPolicyStep(t *testing.T) {
 	if len(trace.Steps) == 0 {
 		t.Fatalf("expected trace steps")
 	}
-	if trace.Steps[0] != (TraceStep{Name: traceStepPolicyEvaluated, Result: "delegated"}) {
+	if trace.Steps[0] != (TraceStep{Name: TraceStepPolicyEvaluated, Result: "delegated"}) {
 		t.Fatalf("unexpected first trace step %+v", trace.Steps[0])
 	}
 }
