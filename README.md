@@ -264,7 +264,8 @@ ok, err := authorizer.
 * `Engine` and `PolicyAuthorizer` are immutable after construction and safe to share across goroutines.
 * `Builder` and `MultiActionBuilder` are value types; every method returns a copy, so they are safe to reuse and branch.
 * `BatchCheck` and multi-action checks run sequentially; canery does not call readers concurrently on its own.
-* Readers, resolvers, wrapped authorizers, and Policies must be concurrency-safe themselves when shared. Policies should be stateless.
+* `Request`, `Decision`, and `Trace` are plain values owned by the caller; canery never retains or mutates them after returning.
+* Readers, resolvers, wrapped authorizers, and Policies must be concurrency-safe themselves when shared. canery does not serialize access to them. Policies should be stateless and must not assume sequential or goroutine-affine invocation.
 
 ## 📂 Examples
 
